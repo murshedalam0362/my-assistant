@@ -1,10 +1,44 @@
 import streamlit as st
-import os, json, glob, requests, urllib.parse, base64
+import os, json, glob, requests, urllib.parse, base64, html
 from pypdf import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-st.set_page_config(page_title="আমার অ্যাসিস্ট্যান্ট", page_icon="📚")
+def _early_cfg():
+    try:
+        with open("data/config.json", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+_c0 = _early_cfg()
+st.set_page_config(page_title=_c0.get("app_name", "আমার সহকারী"), page_icon="📚", layout="centered")
+
+STYLE = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap');
+p, h1, h2, h3, h4, label, button, input, textarea, li, .stMarkdown, .stCaption {
+    font-family: 'Hind Siliguri', sans-serif;
+}
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.block-container {padding-top: 2.5rem; max-width: 760px;}
+.hero {display:flex; align-items:center; gap:14px; padding:18px 20px; border-radius:18px;
+       background:linear-gradient(135deg,#0f766e,#14b8a6); color:#fff; margin-bottom:16px;
+       box-shadow:0 6px 18px rgba(15,118,110,.25);}
+.hero-icon {font-size:38px; line-height:1;}
+.hero-title {font-size:22px; font-weight:700; line-height:1.25;}
+.hero-sub {font-size:14px; opacity:.92; margin-top:2px;}
+.stTabs [data-baseweb="tab-list"] {gap:6px;}
+.stTabs [data-baseweb="tab"] {border-radius:10px 10px 0 0; padding:8px 12px; font-weight:600;}
+.stButton > button, .stDownloadButton > button {border-radius:12px; font-weight:600; border:1px solid #0f766e;}
+.stButton > button:hover {border-color:#14b8a6; color:#14b8a6;}
+[data-testid="stChatMessage"] {border-radius:14px; padding:12px 14px; margin-bottom:8px;}
+[data-testid="stChatInput"] {border-radius:16px;}
+.note {font-size:12.5px; opacity:.75; text-align:center; margin-top:18px;}
+</style>
+"""
 
 DATA = "data"
 BOOKS = f"{DATA}/books"
@@ -148,13 +182,13 @@ def answer_from_books(q):
 def chat_box(key, fn):
     hist = st.session_state.setdefault(key, [])
     for role, text in hist:
-        st.chat_message(role).write(text)
+        st.chat_message(role, avatar="🧑" if role == "user" else "📚").write(text)
     q = st.chat_input("এখানে প্রশ্ন লিখুন...", key=key + "_in")
     if q:
-        st.chat_message("user").write(q)
+        st.chat_message("user", avatar="🧑").write(q)
         with st.spinner("খুঁজছি..."):
             a = fn(q)
-        st.chat_message("assistant").write(a)
+        st.chat_message("assistant", avatar="📚").write(a)
         hist += [("user", q), ("assistant", a)]
 
 
@@ -238,6 +272,14 @@ with st.sidebar:
         st.header("🤖 AI মডেল")
         st.radio("কোনটা ব্যবহার করবেন?", _avail, key="provider_choice")
 
+st.markdown(STYLE, unsafe_allow_html=True)
+_name = html.escape(cfg.get("app_name", "আমার সহকারী"))
+_tag = html.escape(cfg.get("tagline", "বই ও কিতাব থেকে রেফারেন্সসহ উত্তর"))
+st.markdown(
+    f'<div class="hero"><div class="hero-icon">📚</div>'
+    f'<div><div class="hero-title">{_name}</div><div class="hero-sub">{_tag}</div></div></div>',
+    unsafe_allow_html=True)
+
 # ---------------- tabs ----------------
 names = ["📚 বই থেকে প্রশ্ন"]
 if cfg["general_chat"]:
@@ -249,7 +291,9 @@ if is_admin:
 tabs = dict(zip(names, st.tabs(names)))
 
 with tabs["📚 বই থেকে প্রশ্ন"]:
-    st.caption("শুধু আমার সংরক্ষিত বই ও প্রশ্ন-উত্তর থেকে রেফারেন্সসহ উত্তর দেওয়া হবে।")
+    st.caption("শুধু সংরক্ষিত বই ও প্রশ্ন-উত্তর থেকে রেফারেন্সসহ উত্তর দেওয়া হবে।")
+    if not glob.glob(f"{BOOKS}/*") and not load_json(FAQ_FILE, []):
+        st.info("এখনো কোনো বই যোগ করা হয়নি। অ্যাডমিন লগইন করে বই আপলোড করুন।")
     chat_box("book_chat", answer_from_books)
 
 if "➕ সাধারণ চ্যাট" in tabs:
@@ -314,6 +358,12 @@ if is_admin:
         g = st.toggle("➕ সাধারণ চ্যাট চালু", cfg["general_chat"])
         im = st.toggle("🖼️ ছবি বানানো চালু", cfg["image_gen"])
         mc = st.toggle("🤖 ইউজারদের মডেল বাছাইয়ের অপশন দেখান", cfg.get("model_choice", True))
-        if (g, im, mc) != (cfg["general_chat"], cfg["image_gen"], cfg.get("model_choice", True)):
-            save_json(CFG_FILE, {"general_chat": g, "image_gen": im, "model_choice": mc})
+        nm = st.text_input("অ্যাপের নাম", cfg.get("app_name", "আমার সহকারী"))
+        tg = st.text_input("ট্যাগলাইন", cfg.get("tagline", "বই ও কিতাব থেকে রেফারেন্সসহ উত্তর"))
+        new_cfg = {"general_chat": g, "image_gen": im, "model_choice": mc, "app_name": nm, "tagline": tg}
+        if new_cfg != {**cfg, **{k: cfg.get(k, new_cfg[k]) for k in new_cfg if k not in cfg}}:
+            save_json(CFG_FILE, new_cfg)
             st.rerun()
+
+st.markdown('<div class="note">⚠️ এই সহকারী ভুল করতে পারে। গুরুত্বপূর্ণ বিষয়ে মূল কিতাব বা আলেমের সাথে মিলিয়ে নিন।</div>',
+            unsafe_allow_html=True)
