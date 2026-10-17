@@ -10,7 +10,7 @@ DATA = "data"
 BOOKS = f"{DATA}/books"
 FAQ_FILE = f"{DATA}/faq.json"
 CFG_FILE = f"{DATA}/config.json"
-MODEL = "gemini-2.5-flash"
+MODEL = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
 os.makedirs(BOOKS, exist_ok=True)
 
 BLOCKED = ["নবী", "রাসূল", "রাসুল", "সাহাবী", "সাহাবি", "মুহাম্মদ", "nabi", "rasul",
