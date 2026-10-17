@@ -23,6 +23,9 @@ p, h1, h2, h3, h4, label, button, input, textarea, li, .stMarkdown, .stCaption {
 }
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
+[data-testid="stToolbar"], [data-testid="stAppDeployButton"], [data-testid="stMainMenu"],
+[data-testid="stStatusWidget"], [data-testid="stDecoration"] {display: none !important;}
+header[data-testid="stHeader"] {background: transparent;}
 .block-container {padding-top: 2.5rem; max-width: 760px;}
 .hero {display:flex; align-items:center; gap:14px; padding:18px 20px; border-radius:18px;
        background:linear-gradient(135deg,#0f766e,#14b8a6); color:#fff; margin-bottom:16px;
