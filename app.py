@@ -38,8 +38,16 @@ def gemini(prompt, system=None):
         body["systemInstruction"] = {"parts": [{"text": system}]}
     try:
         r = requests.post(url, json=body, timeout=90)
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
+        data = r.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        detail = ""
+        try:
+            detail = str(data.get("error", data))[:300]
+        except Exception:
+            detail = str(e)[:300]
+        if st.session_state.get("admin"):
+            return f"⚠️ এরর (শুধু অ্যাডমিন দেখছেন): {detail}"
         return "⚠️ এখন উত্তর দেওয়া যাচ্ছে না। একটু পরে আবার চেষ্টা করুন।"
 
 
@@ -159,13 +167,26 @@ if "🖼️ ছবি বানান" in tabs:
             if any(w in prompt.lower() for w in BLOCKED):
                 st.warning("দুঃখিত, এই ধরনের ছবি বানানো হয় না। মসজিদ, প্রকৃতি বা ক্যালিগ্রাফি চেষ্টা করুন।")
             else:
-                with st.spinner("ছবি তৈরি হচ্ছে..."):
-                    try:
-                        r = requests.get("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt), timeout=120)
-                        st.image(r.content)
-                        st.download_button("⬇️ ডাউনলোড", r.content, "image.jpg", "image/jpeg")
-                    except Exception:
-                        st.error("ছবি বানানো যায়নি, আবার চেষ্টা করুন।")
+                with st.spinner("ছবি তৈরি হচ্ছে... (১ মিনিট পর্যন্ত লাগতে পারে)"):
+                    img, err = None, ""
+                    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
+                           + "?width=768&height=768&nologo=true&model=flux")
+                    for _ in range(2):
+                        try:
+                            r = requests.get(url, timeout=120, headers={"User-Agent": "Mozilla/5.0"})
+                            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+                                img = r.content
+                                break
+                            err = f"status {r.status_code}: {r.text[:200]}"
+                        except Exception as e:
+                            err = str(e)[:200]
+                if img:
+                    st.image(img)
+                    st.download_button("⬇️ ডাউনলোড", img, "image.jpg", "image/jpeg")
+                else:
+                    st.error("ছবি বানানো যায়নি, একটু পরে আবার চেষ্টা করুন।")
+                    if is_admin:
+                        st.code(err or "unknown error")
 
 if is_admin:
     with tabs["⚙️ অ্যাডমিন প্যানেল"]:
