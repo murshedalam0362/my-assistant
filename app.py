@@ -1,5 +1,5 @@
 import streamlit as st
-import os, json, glob, requests, urllib.parse
+import os, json, glob, requests, urllib.parse, base64
 from pypdf import PdfReader
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -30,25 +30,62 @@ def save_json(path, obj):
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
-def gemini(prompt, system=None):
-    key = st.secrets["GEMINI_API_KEY"]
+def _gemini_call(prompt, system=None):
+    """Returns (text, error)."""
+    key = st.secrets.get("GEMINI_API_KEY", "")
+    if not key:
+        return None, "Gemini key নেই"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent?key={key}"
     body = {"contents": [{"parts": [{"text": prompt}]}]}
     if system:
         body["systemInstruction"] = {"parts": [{"text": system}]}
+    data = {}
     try:
         r = requests.post(url, json=body, timeout=90)
         data = r.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        return data["candidates"][0]["content"]["parts"][0]["text"], ""
     except Exception as e:
-        detail = ""
         try:
-            detail = str(data.get("error", data))[:300]
+            return None, "Gemini: " + str(data.get("error", data))[:250]
         except Exception:
-            detail = str(e)[:300]
-        if st.session_state.get("admin"):
-            return f"⚠️ এরর (শুধু অ্যাডমিন দেখছেন): {detail}"
-        return "⚠️ এখন উত্তর দেওয়া যাচ্ছে না। একটু পরে আবার চেষ্টা করুন।"
+            return None, "Gemini: " + str(e)[:250]
+
+
+def _deepseek_call(prompt, system=None):
+    """Returns (text, error). Uses DEEPSEEK_API_KEY from Secrets."""
+    key = st.secrets.get("DEEPSEEK_API_KEY", "")
+    if not key:
+        return None, "DeepSeek key নেই"
+    model = st.secrets.get("DEEPSEEK_MODEL", "deepseek-chat")
+    msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+    data = {}
+    try:
+        r = requests.post("https://api.deepseek.com/chat/completions",
+                          headers={"Authorization": f"Bearer {key}"},
+                          json={"model": model, "messages": msgs}, timeout=90)
+        data = r.json()
+        return data["choices"][0]["message"]["content"], ""
+    except Exception as e:
+        try:
+            return None, "DeepSeek: " + str(data.get("error", data))[:250]
+        except Exception:
+            return None, "DeepSeek: " + str(e)[:250]
+
+
+def gemini(prompt, system=None):
+    """Main AI call. Order set by AI_PROVIDER secret (default: gemini first, deepseek as backup)."""
+    choice = st.session_state.get("provider_choice") or st.secrets.get("AI_PROVIDER", "gemini")
+    order = [_deepseek_call, _gemini_call] if choice.lower() == "deepseek" else [_gemini_call, _deepseek_call]
+    errors = []
+    for fn in order:
+        text, err = fn(prompt, system)
+        if text:
+            return text
+        if err and "key নেই" not in err:
+            errors.append(err)
+    if st.session_state.get("admin"):
+        return "⚠️ এরর (শুধু অ্যাডমিন দেখছেন): " + " | ".join(errors or ["কোনো API key পাওয়া যায়নি"])
+    return "⚠️ এখন উত্তর দেওয়া যাচ্ছে না। একটু পরে আবার চেষ্টা করুন।"
 
 
 @st.cache_data
@@ -121,6 +158,56 @@ def chat_box(key, fn):
         hist += [("user", q), ("assistant", a)]
 
 
+
+def gen_image(prompt):
+    """Try Hugging Face FLUX first (if token set), then Pollinations. Returns (bytes, error)."""
+    err = ""
+    # 1) Gemini image model (uses the same Gemini key)
+    gm = st.secrets.get("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+    if gm.lower() != "off":
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{gm}:generateContent"
+                f"?key={st.secrets['GEMINI_API_KEY']}",
+                json={"contents": [{"parts": [{"text": prompt}]}],
+                      "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}},
+                timeout=120)
+            data = r.json()
+            for part in data["candidates"][0]["content"]["parts"]:
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline:
+                    return base64.b64decode(inline["data"]), ""
+            err = f"Gemini: no image in reply {str(data)[:150]}"
+        except Exception as e:
+            try:
+                err = f"Gemini: {str(data.get('error', data))[:250]}"
+            except Exception:
+                err = f"Gemini: {str(e)[:200]}"
+    # 2) Hugging Face
+    tok = st.secrets.get("HF_TOKEN", "")
+    if tok:
+        model = st.secrets.get("HF_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
+        try:
+            r = requests.post(
+                f"https://router.huggingface.co/hf-inference/models/{model}",
+                headers={"Authorization": f"Bearer {tok}"},
+                json={"inputs": prompt}, timeout=120)
+            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+                return r.content, ""
+            err += f" | HuggingFace {r.status_code}: {r.text[:200]}"
+        except Exception as e:
+            err += f" | HuggingFace: {str(e)[:200]}"
+    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
+           + "?width=768&height=768&nologo=true&model=flux")
+    try:
+        r = requests.get(url, timeout=120, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+            return r.content, ""
+        err += f" | Pollinations {r.status_code}: {r.text[:150]}"
+    except Exception as e:
+        err += f" | Pollinations: {str(e)[:150]}"
+    return None, err
+
 # ---------------- sidebar: admin login ----------------
 cfg = load_json(CFG_FILE, {"general_chat": True, "image_gen": True})
 is_admin = st.session_state.get("admin", False)
@@ -139,6 +226,17 @@ with st.sidebar:
         if st.button("লগআউট"):
             st.session_state["admin"] = False
             st.rerun()
+
+with st.sidebar:
+    _avail = []
+    if st.secrets.get("GEMINI_API_KEY"):
+        _avail.append("Gemini")
+    if st.secrets.get("DEEPSEEK_API_KEY"):
+        _avail.append("DeepSeek")
+    if cfg.get("model_choice", True) and len(_avail) > 1:
+        st.divider()
+        st.header("🤖 AI মডেল")
+        st.radio("কোনটা ব্যবহার করবেন?", _avail, key="provider_choice")
 
 # ---------------- tabs ----------------
 names = ["📚 বই থেকে প্রশ্ন"]
@@ -168,18 +266,7 @@ if "🖼️ ছবি বানান" in tabs:
                 st.warning("দুঃখিত, এই ধরনের ছবি বানানো হয় না। মসজিদ, প্রকৃতি বা ক্যালিগ্রাফি চেষ্টা করুন।")
             else:
                 with st.spinner("ছবি তৈরি হচ্ছে... (১ মিনিট পর্যন্ত লাগতে পারে)"):
-                    img, err = None, ""
-                    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
-                           + "?width=768&height=768&nologo=true&model=flux")
-                    for _ in range(2):
-                        try:
-                            r = requests.get(url, timeout=120, headers={"User-Agent": "Mozilla/5.0"})
-                            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
-                                img = r.content
-                                break
-                            err = f"status {r.status_code}: {r.text[:200]}"
-                        except Exception as e:
-                            err = str(e)[:200]
+                    img, err = gen_image(prompt)
                 if img:
                     st.image(img)
                     st.download_button("⬇️ ডাউনলোড", img, "image.jpg", "image/jpeg")
@@ -226,6 +313,7 @@ if is_admin:
         st.subheader("🔧 সেটিংস")
         g = st.toggle("➕ সাধারণ চ্যাট চালু", cfg["general_chat"])
         im = st.toggle("🖼️ ছবি বানানো চালু", cfg["image_gen"])
-        if (g, im) != (cfg["general_chat"], cfg["image_gen"]):
-            save_json(CFG_FILE, {"general_chat": g, "image_gen": im})
+        mc = st.toggle("🤖 ইউজারদের মডেল বাছাইয়ের অপশন দেখান", cfg.get("model_choice", True))
+        if (g, im, mc) != (cfg["general_chat"], cfg["image_gen"], cfg.get("model_choice", True)):
+            save_json(CFG_FILE, {"general_chat": g, "image_gen": im, "model_choice": mc})
             st.rerun()
