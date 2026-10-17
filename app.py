@@ -245,43 +245,48 @@ def gen_image(prompt):
         err += f" | Pollinations: {str(e)[:150]}"
     return None, err
 
-# ---------------- sidebar: admin login ----------------
+# ---------------- admin login (hidden; open the app with ?admin=1) ----------------
 cfg = load_json(CFG_FILE, {"general_chat": True, "image_gen": True})
 is_admin = st.session_state.get("admin", False)
-with st.sidebar:
-    st.header("🔐 অ্যাডমিন")
-    if not is_admin:
-        pw = st.text_input("পাসওয়ার্ড", type="password")
-        if st.button("লগইন"):
-            if pw and pw == st.secrets.get("ADMIN_PASSWORD"):
-                st.session_state["admin"] = True
-                st.rerun()
-            else:
-                st.error("ভুল পাসওয়ার্ড")
-    else:
-        st.success("লগইন করা আছে")
-        if st.button("লগআউট"):
-            st.session_state["admin"] = False
-            st.rerun()
-
-with st.sidebar:
-    _avail = []
-    if st.secrets.get("GEMINI_API_KEY"):
-        _avail.append("Gemini")
-    if st.secrets.get("DEEPSEEK_API_KEY"):
-        _avail.append("DeepSeek")
-    if cfg.get("model_choice", True) and len(_avail) > 1:
-        st.divider()
-        st.header("🤖 AI মডেল")
-        st.radio("কোনটা ব্যবহার করবেন?", _avail, key="provider_choice")
+if st.query_params.get("admin") == "1":
+    st.session_state["show_admin"] = True
 
 st.markdown(STYLE, unsafe_allow_html=True)
+# the sidebar is not used any more, so hide it (and its open button) for everyone
+st.markdown('<style>[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], '
+            '[data-testid="collapsedControl"] {display: none !important;}</style>',
+            unsafe_allow_html=True)
 _name = html.escape(cfg.get("app_name", "আমার সহকারী"))
 _tag = html.escape(cfg.get("tagline", "বই ও কিতাব থেকে রেফারেন্সসহ উত্তর"))
 st.markdown(
     f'<div class="hero"><div class="hero-icon">📚</div>'
     f'<div><div class="hero-title">{_name}</div><div class="hero-sub">{_tag}</div></div></div>',
     unsafe_allow_html=True)
+
+if st.session_state.get("show_admin") or is_admin:
+    with st.expander("🔐 অ্যাডমিন", expanded=not is_admin):
+        if not is_admin:
+            pw = st.text_input("পাসওয়ার্ড", type="password", key="admin_pw")
+            if st.button("লগইন"):
+                if pw and pw == st.secrets.get("ADMIN_PASSWORD"):
+                    st.session_state["admin"] = True
+                    st.rerun()
+                else:
+                    st.error("ভুল পাসওয়ার্ড")
+        else:
+            st.success("লগইন করা আছে। ডানের শেষ ট্যাব ⚙️ অ্যাডমিন প্যানেল।")
+            if st.button("লগআউট"):
+                st.session_state["admin"] = False
+                st.session_state["show_admin"] = False
+                st.rerun()
+
+_avail = []
+if st.secrets.get("GEMINI_API_KEY"):
+    _avail.append("Gemini")
+if st.secrets.get("DEEPSEEK_API_KEY"):
+    _avail.append("DeepSeek")
+if cfg.get("model_choice", True) and len(_avail) > 1:
+    st.radio("🤖 AI মডেল", _avail, horizontal=True, key="provider_choice")
 
 # ---------------- tabs ----------------
 names = ["📚 বই থেকে প্রশ্ন"]
